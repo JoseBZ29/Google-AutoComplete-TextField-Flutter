@@ -1,6 +1,7 @@
 library google_places_flutter;
 
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_places_flutter/model/place_details.dart';
@@ -35,6 +36,7 @@ class GooglePlaceAutoCompleteTextField extends StatefulWidget {
   FocusNode? focusNode;
   PlaceType? placeType;
   String? language;
+  Widget Function(BuildContext, EditableTextState)? contextMenuBuilder;
 
   GooglePlaceAutoCompleteTextField(
       {required this.textEditingController,
@@ -54,7 +56,9 @@ class GooglePlaceAutoCompleteTextField extends StatefulWidget {
       this.containerHorizontalPadding,
       this.containerVerticalPadding,
       this.focusNode,
-      this.placeType,this.language='en'});
+      this.placeType,
+      this.contextMenuBuilder,
+      this.language = 'en'});
 
   @override
   _GooglePlaceAutoCompleteTextFieldState createState() =>
@@ -76,6 +80,8 @@ class _GooglePlaceAutoCompleteTextFieldState
 
   CancelToken? _cancelToken = CancelToken();
 
+  Timer? _debounceTimer;
+
   @override
   Widget build(BuildContext context) {
     return CompositedTransformTarget(
@@ -96,11 +102,20 @@ class _GooglePlaceAutoCompleteTextFieldState
           children: [
             Expanded(
               child: TextFormField(
+                contextMenuBuilder: widget.contextMenuBuilder,
+                enableInteractiveSelection: false,
                 decoration: widget.inputDecoration,
                 style: widget.textStyle,
                 controller: widget.textEditingController,
                 focusNode: widget.focusNode ?? FocusNode(),
                 onChanged: (string) {
+                  subject.add(string);
+                  if (widget.isCrossBtnShown) {
+                    isCrossBtn = string.isNotEmpty ? true : false;
+                    setState(() {});
+                  }
+                },
+                onFieldSubmitted: (string) {
                   subject.add(string);
                   if (widget.isCrossBtnShown) {
                     isCrossBtn = string.isNotEmpty ? true : false;
@@ -156,6 +171,7 @@ class _GooglePlaceAutoCompleteTextFieldState
           ? Options(headers: {"x-requested-with": "XMLHttpRequest"})
           : null;
       Response response = await _dio.get(url);
+      print(url);
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       Map map = response.data;
@@ -183,19 +199,44 @@ class _GooglePlaceAutoCompleteTextFieldState
       this._overlayEntry = this._createOverlayEntry();
       Overlay.of(context)!.insert(this._overlayEntry!);
     } catch (e) {
+      print(e);
       var errorHandler = ErrorHandler.internal().handleError(e);
       _showSnackBar("${errorHandler.message}");
     }
   }
 
   @override
+  void dispose() {
+    widget.textEditingController.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _dio = Dio();
-    subject.stream
-        .distinct()
-        .debounceTime(Duration(milliseconds: widget.debounceTime))
-        .listen(textChanged);
+    // subject.stream
+    //     .distinct()
+    //     .debounceTime(Duration(milliseconds: widget.debounceTime))
+    //     .listen(textChanged);
+    widget.textEditingController.addListener(_onTextChanged);
+  }
+
+  void _onTextChanged() {
+    if (_debounceTimer?.isActive ?? false) {
+      _debounceTimer!.cancel();
+    }
+
+    _debounceTimer = Timer(Duration(milliseconds: widget.debounceTime), () {
+      print(
+          "Texto en el componente hijo: ${widget.textEditingController.text}");
+      if (widget.textEditingController.text.length > 0) {
+        getLocation(widget.textEditingController.text);
+      } else {
+        alPredictions.clear();
+        this._overlayEntry!.remove();
+      }
+    });
   }
 
   textChanged(String text) async {
